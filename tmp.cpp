@@ -1,5 +1,8 @@
 #include "bits/stdc++.h"
+#include "mpi.h"
+
 using namespace std;
+
 
 
 //  Input Format
@@ -22,7 +25,7 @@ using namespace std;
 
 
 
-void readGraph(string filename, int &n, int &m, vector<vector<int>> &adjList) {
+void readGraph(string filename, int &n, int &m, vector<vector<int>> &adjList, vector<int> &degree) {
     ifstream file(filename, ios::binary);
     if (!file.is_open()) {
         cout << "Error opening file" << endl;
@@ -31,11 +34,13 @@ void readGraph(string filename, int &n, int &m, vector<vector<int>> &adjList) {
     file.read((char *) &n, sizeof(int));
     file.read((char *) &m, sizeof(int));
     adjList.resize(n);
+    degree.resize(n);
     for (int i = 0; i < n; i++) {
         int node, deg;
         file.read((char *) &node, sizeof(int));
         file.read((char *) &deg, sizeof(int));
         adjList[node].resize(deg);
+        degree[node] = deg;
         for (int j = 0; j < deg; j++) {
             file.read((char *) &adjList[node][j], sizeof(int));
         }
@@ -43,17 +48,125 @@ void readGraph(string filename, int &n, int &m, vector<vector<int>> &adjList) {
     file.close();
 }
 
+
+
 int main(){
-      int n, m;
-      vector<vector<int>> adjList;
-      readGraph("test0/test-input-0.gra", n, m, adjList);
-      cout << n << " " << m << endl;
-      for (int i = 0; i < n; i++) {
-         cout << i << " " << adjList[i].size() << " ";
-         for (int j = 0; j < adjList[i].size(); j++) {
-               cout << adjList[i][j] << " ";
-         }
-         cout << endl;
-      }
-      return 0;
+    int n, m;
+    vector<vector<int>> adjList;
+    vector<int> degrees;
+    readGraph("test0/test-input-0.gra", n, m, adjList, degrees);
+    cout << "n = " << n << endl;
+    cout << "m = " << m << endl;
+
+    // int* deleted = new int[n];
+    // memset(deleted, 0, n * sizeof(int));
+    // int* deg_reduced = new int[n];
+    // memset(deg_reduced, 0, n * sizeof(int));
+    // int k1 = 23;
+    // int num_deletable = 0;
+    // do {
+    //     int local_num_deletable = 0;
+    //     for (int i = 0; i < n; i++) {
+    //         if (deleted[i]) {
+    //             continue;
+    //         }
+    //         if (degrees[i] - deg_reduced[i] < k1 - 1) {
+    //             deleted[i] = 1;
+    //             local_num_deletable++;
+    //             for (int j = 0; j < degrees[i]; j++) {
+    //                 int neighbor = adjList[i][j];
+    //                 if (deleted[neighbor]) { 
+    //                     continue;
+    //                 }
+    //                 deg_reduced[neighbor]++;
+    //             }
+    //         }
+    //     }
+    //     num_deletable = local_num_deletable;
+    //     cout << "num_deletable = " << num_deletable << endl;
+    // } while (num_deletable > 0);
+
+    // for (int i = 0; i < n; i++) {
+    //     if (deleted[i]) {
+    //         cout << i << " ";
+    //     }
+    // }
+
+    // return 0;
+    MPI_Init(NULL, NULL);
+    int world_size;
+    MPI_Comm_size(MPI_COMM_WORLD, &world_size);
+    int world_rank;
+    MPI_Comm_rank(MPI_COMM_WORLD, &world_rank);
+    int start_vertex = world_rank * n / world_size;
+    int end_vertex = (world_rank + 1) * n / world_size;
+    if (world_rank == world_size - 1) {
+        end_vertex = n;
+    }
+    // prefilter 
+    int* deleted = new int[n];
+    int* local_deleted = new int[n];
+    int* local_deg_reduced = new int[n];
+    int* deg_reduced = new int[n];
+    memset(deg_reduced, 0, n * sizeof(int));
+    memset(deleted, 0, n * sizeof(int));
+    memset(local_deleted, 0, n * sizeof(int));
+
+    int k1 = 24;
+    int num_deletable = 0;
+    do {
+        for (int i = 0; i < n; i++) {
+            local_deg_reduced[i] = 0;
+        }
+        int local_num_deletable = 0;
+        for (int i = start_vertex; i < end_vertex; i++){
+            local_deleted[i] = deleted[i];
+        }
+        for (int i = start_vertex; i < end_vertex; i++) {
+            if (local_deleted[i]) {
+                continue;
+            }
+            if (degrees[i] < k1 - 1) {
+                local_deleted[i] = 1;
+                local_num_deletable++;
+                for (int j = 0; j < degrees[i]; j++) {
+                    int neighbor = adjList[i][j];
+                    if (deleted[neighbor]) { 
+                        continue;
+                    }
+                    local_deg_reduced[neighbor]++;
+                }
+            }
+        }
+        MPI_Allreduce(&local_num_deletable, &num_deletable, 1, MPI_INT, MPI_SUM, MPI_COMM_WORLD);
+        MPI_Allreduce(local_deg_reduced, deg_reduced, n, MPI_INT, MPI_SUM, MPI_COMM_WORLD);
+        MPI_Allreduce(local_deleted, deleted, n, MPI_INT, MPI_SUM, MPI_COMM_WORLD);
+        
+        if (world_rank == 0){
+            for (int i = 0; i < n; i++){
+                cout << deg_reduced[i] << " ";
+            }
+            cout << endl;
+        }
+        for (int i = 0; i < n; i++){
+            degrees[i] -= deg_reduced[i];
+        }
+    } while (num_deletable > 0);
+    if (world_rank == 0) {
+        cout << "prefilter done" << endl;
+        for (int i = 0; i < n; i++) {
+            if (deleted[i]) {
+                cout << i << " ";
+            }
+        }
+        // for (int i : degrees) cout << i << " ";
+    }
+    // end of prefilter
+    MPI_Finalize();
+
+
+
 }
+
+// compile: mpicc -g -Wall -o program_3_01 program_3_01.cpp
+// run: mpiexec -n <number of processes> ./program_3_01
